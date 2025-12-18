@@ -36,12 +36,12 @@ AI Meeting Note Taker is a **Windows desktop application** that silently records
 ### Core Functionality
 | Feature | Description |
 |---------|-------------|
-| **Dual Audio Capture** | Records both microphone and system audio (WASAPI loopback) |
-| **GPU Transcription** | Uses faster-whisper with CUDA acceleration |
-| **Smart Summarization** | Generates structured MoM using Ollama + LLaMA 3.1 |
-| **Auto Email** | Sends meeting notes to your inbox automatically |
-| **PDF Export** | Exports professional PDF documents |
-| **Action Item Tracking** | Extracts and tracks action items per meeting |
+| 🎤 **Dual Audio Capture** | Records both microphone and system audio (WASAPI loopback) |
+| 🧠 **GPU Transcription** | Uses faster-whisper with CUDA acceleration |
+| 📝 **Smart Summarization** | Generates structured MoM using Ollama + LLaMA 3.1 |
+| 📧 **Auto Email** | Sends meeting notes to your inbox automatically |
+| 📄 **PDF Export** | Exports professional PDF documents |
+| ✅ **Action Item Tracking** | Extracts and tracks action items per meeting |
 
 ### User Experience
 - **Floating Button UI** - Minimal, always-on-top interface
@@ -52,7 +52,7 @@ AI Meeting Note Taker is a **Windows desktop application** that silently records
 
 ---
 
-## Demo
+## 🎬 Demo
 
 <div align="center">
 
@@ -82,7 +82,7 @@ recordings/
 
 ---
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
@@ -95,7 +95,7 @@ recordings/
 
 ---
 
-## Requirements
+## 📋 Requirements
 
 ### Hardware
 - **GPU**: NVIDIA GPU with 6GB+ VRAM (RTX 3060+ recommended)
@@ -110,7 +110,7 @@ recordings/
 
 ---
 
-## Installation
+## 🚀 Installation
 
 ### 1. Clone the Repository
 ```bash
@@ -159,7 +159,7 @@ Or use the desktop shortcut: `Start_Meeting_Recorder.vbs`
 
 ---
 
-## Usage
+## 📖 Usage
 
 ### Quick Start
 1. **Launch** the application
@@ -183,7 +183,7 @@ Or use the desktop shortcut: `Start_Meeting_Recorder.vbs`
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -212,7 +212,7 @@ Or use the desktop shortcut: `Start_Meeting_Recorder.vbs`
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 AI-Note-Taker/
@@ -233,7 +233,7 @@ AI-Note-Taker/
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 ### config.json Reference
 
@@ -264,7 +264,7 @@ AI-Note-Taker/
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
@@ -284,7 +284,7 @@ git checkout -b feature/your-feature-name
 
 ---
 
-## Performance
+## 📊 Performance
 
 | Metric | Value |
 |--------|-------|
@@ -295,7 +295,7 @@ git checkout -b feature/your-feature-name
 
 ---
 
-## Roadmap
+## 🗺️ Roadmap
 
 - [x] Multi-device audio capture
 - [x] 6 meeting type templates
@@ -309,13 +309,13 @@ git checkout -b feature/your-feature-name
 
 ---
 
-## License
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 - [OpenAI Whisper](https://github.com/openai/whisper) - Speech recognition
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) - Optimized inference
@@ -326,7 +326,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <div align="center">
 
-**Built with for productive meetings**
+**Built with ❤️ for productive meetings**
 
 [⬆ Back to Top](#-ai-meeting-note-taker)
 
