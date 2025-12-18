@@ -18,7 +18,7 @@
 
 ---
 
-## 🎯 Overview
+## Overview
 
 AI Meeting Note Taker is a **Windows desktop application** that silently records your meetings (Zoom, Teams, Google Meet, or in-person), transcribes them using GPU-accelerated Whisper, and generates structured meeting minutes using local LLMs—all without sending your data to the cloud.
 
@@ -31,7 +31,7 @@ AI Meeting Note Taker is a **Windows desktop application** that silently records
 
 ---
 
-## ✨ Features
+## Features
 
 ### Core Functionality
 | Feature | Description |
