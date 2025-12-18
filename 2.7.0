@@ -1,0 +1,14 @@
+Collecting fpdf2
+  Downloading fpdf2-2.8.5-py3-none-any.whl.metadata (76 kB)
+Collecting defusedxml (from fpdf2)
+  Using cached defusedxml-0.7.1-py2.py3-none-any.whl.metadata (32 kB)
+Requirement already satisfied: Pillow!=9.2.*,>=8.3.2 in c:\users\khalidsiddiqui\miniconda3\envs\ai-note-taker\lib\site-packages (from fpdf2) (11.3.0)
+Collecting fonttools>=4.34.0 (from fpdf2)
+  Downloading fonttools-4.61.1-cp311-cp311-win_amd64.whl.metadata (116 kB)
+Downloading fpdf2-2.8.5-py3-none-any.whl (301 kB)
+Downloading fonttools-4.61.1-cp311-cp311-win_amd64.whl (2.3 MB)
+   ---------------------------------------- 2.3/2.3 MB 66.8 MB/s  0:00:00
+Using cached defusedxml-0.7.1-py2.py3-none-any.whl (25 kB)
+Installing collected packages: fonttools, defusedxml, fpdf2
+
+Successfully installed defusedxml-0.7.1 fonttools-4.61.1 fpdf2-2.8.5

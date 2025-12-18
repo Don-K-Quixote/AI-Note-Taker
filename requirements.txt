@@ -1,0 +1,20 @@
+# Audio Recording
+numpy>=1.24.0
+sounddevice>=0.4.6
+PyAudioWPatch>=0.2.12.6    # WASAPI loopback support for Windows
+
+# System Tray
+pystray>=0.19.5
+Pillow>=10.0.0
+keyboard>=0.13.5
+
+# Whisper Transcription (faster-whisper is optimized for GPU)
+faster-whisper>=1.0.0
+ctranslate2>=4.0.0         # Backend for faster-whisper
+
+# Ollama Communication
+requests>=2.31.0
+
+# Optional: Alternative Whisper implementations
+# openai-whisper>=20231117  # Original OpenAI implementation
+# whisperx>=3.1.1           # With speaker diarization
