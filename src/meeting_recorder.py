@@ -1239,10 +1239,24 @@ You can play it to verify if any audio was captured.
                     if stripped.startswith('|') and '---' not in stripped:
                         cells = [c.strip() for c in stripped.split('|')]
                         cells = [c for c in cells if c]
-                        header_words = ['action', 'item', 'task', '#', 'owner', 'deadline', 'status']
-                        if cells and not any(h in cells[0].lower() for h in header_words):
-                            if len(cells[0]) > 2:
-                                action_items.append(cells)
+                        
+                        # Skip header row
+                        header_words = ['action', 'item', 'task', 'owner', 'deadline', 'status', 'priority']
+                        if cells and any(h in cells[0].lower() for h in header_words):
+                            continue
+                        # Skip if first cell is just "#"
+                        if cells and cells[0] == '#':
+                            continue
+                        
+                        # Handle tables with row number column (e.g., | 1 | Action | Owner |)
+                        if cells and cells[0].isdigit() and len(cells) > 1:
+                            # Skip the row number, use remaining cells
+                            action_text = cells[1] if len(cells) > 1 else ""
+                            if action_text and len(action_text) > 3:
+                                action_items.append(cells[1:])  # Skip the # column
+                        elif cells and len(cells[0]) > 3:
+                            # No row number column
+                            action_items.append(cells)
                     
                     # Bullet points (- item or * item)
                     elif stripped.startswith('- ') or stripped.startswith('* '):
