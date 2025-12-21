@@ -83,8 +83,10 @@ recordings/
 *.transcript.txt
 transcript.txt
 
-# Configuration with secrets
+# Configuration with secrets (exclude from all directories)
 config.json
+src/config.json
+**/config.json
 
 # Model cache (large files)
 models/
@@ -110,6 +112,7 @@ tmp/
 htmlcov/
 .tox/
 .nox/
+tests/
 
 # ------------------------------------------------------------
 # Build / Distribution
