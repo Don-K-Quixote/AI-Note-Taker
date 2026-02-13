@@ -988,7 +988,7 @@ Total output should be approximately 1 page."""
                         "top_p": 0.9
                     }
                 },
-                timeout=300
+                timeout=900
             )
             response.raise_for_status()
             return response.json().get("response", "Error: No response from Ollama")
@@ -1199,9 +1199,16 @@ You can play it to verify if any audio was captured.
             return None
     
     def _track_action_items(self, mom_content: str, meeting_folder: Path, title: str = None):
-        """Extract and save action items to meeting folder."""
+        """
+        Extract and save action items to meeting folder.
+        
+        Uses two-pass approach:
+        1. Extract from formal action-oriented sections
+        2. Detect conversational action phrases throughout content
+        """
         try:
-            # Find action items section
+            import re
+            
             action_items = []
             in_action_section = False
             
@@ -1211,9 +1218,13 @@ You can play it to verify if any audio was captured.
                 'practice exercise', 'practice exercises', 
                 'key takeaway', 'key takeaways',
                 'further learning', 'recommendation', 
-                'to-do', 'todo', 'tasks'
+                'to-do', 'todo', 'tasks', 'call to action',
+                'resources mentioned', 'tools mentioned'
             ]
             
+            # ==================================================================
+            # PASS 1: Extract from formal action sections
+            # ==================================================================
             lines = mom_content.split('\n')
             for i, line in enumerate(lines):
                 line_lower = line.lower()
@@ -1250,7 +1261,6 @@ You can play it to verify if any audio was captured.
                         
                         # Handle tables with row number column (e.g., | 1 | Action | Owner |)
                         if cells and cells[0].isdigit() and len(cells) > 1:
-                            # Skip the row number, use remaining cells
                             action_text = cells[1] if len(cells) > 1 else ""
                             if action_text and len(action_text) > 3:
                                 action_items.append(cells[1:])  # Skip the # column
@@ -1266,7 +1276,7 @@ You can play it to verify if any audio was captured.
                             action_items.append([item])
                     
                     # Numbered list (1. Item or 1) Item)
-                    elif stripped[0].isdigit():
+                    elif stripped and stripped[0].isdigit():
                         # Try to extract after "1. " or "1) "
                         item = None
                         if '. ' in stripped[:5]:
@@ -1279,7 +1289,92 @@ You can play it to verify if any audio was captured.
                             if len(item) > 3:
                                 action_items.append([item])
             
-            # Save action items file in meeting folder
+            # ==================================================================
+            # PASS 2: Detect conversational action phrases
+            # ==================================================================
+            conversational_patterns = [
+                r'i want you to ([^.!?]+)',
+                r'my suggestion is ([^.!?]+)',
+                r'you should ([^.!?]+)',
+                r'please try ([^.!?]+)',
+                r'make sure to ([^.!?]+)',
+                r'don\'t forget to ([^.!?]+)',
+                r'remember to ([^.!?]+)',
+                r'note this down[:\s]+([^.!?]+)',
+                r'note down ([^.!?]+)',
+                r'as a challenge[,\s]+([^.!?]+)',
+                r'challenge for you[:\s]+([^.!?]+)',
+                r'homework[:\s]+([^.!?]+)',
+                r'assignment[:\s]+([^.!?]+)',
+                r'practice ([^.!?]+)',
+                r'try this out[:\s]+([^.!?]+)',
+                r'check out ([^.!?]+)',
+                r'take a look at ([^.!?]+)',
+                r'read about ([^.!?]+)',
+                r'learn more about ([^.!?]+)',
+                r'explore ([^.!?]+)',
+                r'download ([^.!?]+)',
+                r'search for ([^.!?]+)',
+                r'look into ([^.!?]+)',
+            ]
+            
+            # Search entire content for conversational action items
+            full_content = mom_content.lower()
+            conversational_items = []
+            
+            for pattern in conversational_patterns:
+                matches = re.finditer(pattern, full_content, re.IGNORECASE)
+                for match in matches:
+                    if match.group(1):
+                        item_text = match.group(1).strip()
+                        # Clean up the text
+                        item_text = item_text.replace('**', '').replace('`', '')
+                        item_text = item_text.replace('\n', ' ').strip()
+                        
+                        # Skip if too short or too long
+                        if len(item_text) > 10 and len(item_text) < 200:
+                            # Capitalize first letter
+                            item_text = item_text[0].upper() + item_text[1:]
+                            conversational_items.append(item_text)
+            
+            # Deduplicate conversational items (remove very similar ones)
+            unique_conversational = []
+            for item in conversational_items:
+                # Check if this item is substantially different from existing ones
+                is_unique = True
+                item_words = set(item.lower().split())
+                for existing in unique_conversational:
+                    existing_words = set(existing.lower().split())
+                    # If >70% word overlap, consider it duplicate
+                    overlap = len(item_words & existing_words)
+                    if overlap / max(len(item_words), 1) > 0.7:
+                        is_unique = False
+                        break
+                
+                if is_unique:
+                    unique_conversational.append(item)
+            
+            # Add conversational items (but don't duplicate formal ones)
+            for conv_item in unique_conversational:
+                # Check if already in formal action items
+                is_duplicate = False
+                for action_item in action_items:
+                    formal_text = action_item[0] if isinstance(action_item, list) else action_item
+                    if isinstance(formal_text, str):
+                        # Check for substantial overlap
+                        formal_words = set(formal_text.lower().split())
+                        conv_words = set(conv_item.lower().split())
+                        overlap = len(formal_words & conv_words)
+                        if overlap / max(len(conv_words), 1) > 0.5:
+                            is_duplicate = True
+                            break
+                
+                if not is_duplicate:
+                    action_items.append([conv_item])
+            
+            # ==================================================================
+            # Save action items file
+            # ==================================================================
             action_file = meeting_folder / "action_items.md"
             meeting_date = datetime.now().strftime("%B %d, %Y %I:%M %p")
             meeting_name = title if title else meeting_folder.name
@@ -1289,7 +1384,10 @@ You can play it to verify if any audio was captured.
                 f.write(f"*{meeting_date}*\n\n")
                 
                 if action_items:
-                    if len(action_items[0]) > 1:
+                    # Determine if we have tabular data or simple list
+                    has_table_data = any(len(item) > 1 for item in action_items)
+                    
+                    if has_table_data:
                         # Table format
                         f.write("| # | Action | Owner | Deadline | Status |\n")
                         f.write("|---|--------|-------|----------|--------|\n")
@@ -1299,9 +1397,10 @@ You can play it to verify if any audio was captured.
                             deadline = item[2] if len(item) > 2 else "TBD"
                             f.write(f"| {i} | {action} | {owner} | {deadline} | ⬜ Pending |\n")
                     else:
-                        # List format
+                        # Simple list format
                         for i, item in enumerate(action_items, 1):
-                            f.write(f"{i}. ⬜ {item[0]}\n")
+                            action_text = item[0] if isinstance(item, list) else item
+                            f.write(f"{i}. ⬜ {action_text}\n")
                 else:
                     f.write("*No action items identified in this meeting.*\n")
                 
@@ -1309,6 +1408,12 @@ You can play it to verify if any audio was captured.
                 f.write("*Status: ⬜ Pending | ✅ Done | ❌ Cancelled*\n")
             
             print(f"Action items saved: {len(action_items)} items → {action_file}")
+            
+            # Print breakdown for debugging
+            formal_count = len([item for item in action_items if isinstance(item, list) and len(item) > 1])
+            conversational_count = len(action_items) - formal_count
+            if conversational_count > 0:
+                print(f"  └─ {formal_count} from formal sections, {conversational_count} from conversational phrases")
                 
         except Exception as e:
             print(f"Action item tracking failed: {e}")
@@ -1559,9 +1664,11 @@ class FloatingButton:
         )
         self.status_label.pack()
         
-        # Make window draggable
-        self.button.bind('<Button-1>', self._start_drag)
-        self.button.bind('<B1-Motion>', self._drag)
+        # Make window draggable (bind to frame and status label, not button)
+        self.frame.bind('<Button-1>', self._start_drag)
+        self.frame.bind('<B1-Motion>', self._drag)
+        self.status_label.bind('<Button-1>', self._start_drag)
+        self.status_label.bind('<B1-Motion>', self._drag)
         
         # Right-click menu
         self.menu = tk.Menu(self.root, tearoff=0)
