@@ -88,6 +88,22 @@ config.json
 src/config.json
 **/config.json
 
+# Launcher scripts (machine-specific hardcoded paths)
+Start_Meeting_Recorder.vbs
+*.vbs
+
+# Utility / one-time scripts
+run.bat
+check_git_status.bat
+setup_portfolio.bat
+
+# Scratch / ad-hoc test scripts in src
+src/detailed_mom.py
+src/fast_test.py
+src/instant_test.py
+src/test_brief.py
+src/reprocess_iiml.py
+
 # Model cache (large files)
 models/
 *.bin
