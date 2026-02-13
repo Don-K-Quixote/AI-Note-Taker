@@ -12,8 +12,18 @@ keyboard>=0.13.5
 faster-whisper>=1.0.0
 ctranslate2>=4.0.0         # Backend for faster-whisper
 
-# Ollama Communication
+# LLM Communication
 requests>=2.31.0
+openai>=1.0.0              # OpenAI GPT provider
+
+# PDF Export
+fpdf2>=2.7.0
+
+# Logging
+loguru>=0.7.0
+
+# Environment
+python-dotenv>=1.0.0
 
 # Optional: Alternative Whisper implementations
 # openai-whisper>=20231117  # Original OpenAI implementation

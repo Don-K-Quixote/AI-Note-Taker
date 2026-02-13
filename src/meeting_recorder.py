@@ -24,7 +24,14 @@ import numpy as np
 import sounddevice as sd
 import pyaudiowpatch as pyaudio
 import requests
+from dotenv import load_dotenv
 from faster_whisper import WhisperModel
+from loguru import logger
+
+# Load .env before anything reads env vars
+load_dotenv(Path(__file__).parent.parent / ".env")
+
+from llm_providers import LLMProvider, OllamaProvider, OpenAIProvider, get_provider
 
 
 # ============================================================
@@ -42,11 +49,20 @@ DEFAULT_CONFIG = {
         "compute_type": "float16",
         "language": None
     },
+    "llm": {
+        "provider": "ollama"  # "ollama" or "openai"
+    },
     "ollama": {
         "model": "llama3.1:8b",
         "url": "http://localhost:11434/api/generate",
         "temperature": 0.3,
         "context_window": 8192
+    },
+    "openai": {
+        "model": "gpt-4o-mini",
+        "api_key": "",          # Prefer OPENAI_API_KEY env var
+        "temperature": 0.3,
+        "max_tokens": 4096
     },
     "email": {
         "enabled": True,
@@ -653,7 +669,7 @@ class AudioRecorder:
                     continue
             return loopback_devices
         except Exception as e:
-            print(f"Error getting loopback devices: {e}")
+            logger.error(f"Error getting loopback devices: {e}")
             return []
     
     def _auto_select_device(self) -> dict | None:
@@ -665,7 +681,7 @@ class AudioRecorder:
             # Get Windows default output device
             default_output = self.pa.get_default_output_device_info()
             default_name = default_output.get("name", "")
-            print(f"\nWindows default audio output: {default_name}")
+            logger.info(f"Windows default audio output: {default_name}")
             
             # Find matching loopback device
             # The loopback device name usually contains the output device name
@@ -676,15 +692,15 @@ class AudioRecorder:
                 # Check if names match (loopback name contains default name or vice versa)
                 if (default_name.lower() in loopback_name.lower() or 
                     loopback_name.lower() in default_name.lower()):
-                    print(f">>> Auto-selected matching loopback: {dev['name']}")
+                    logger.info(f"Auto-selected matching loopback: {dev['name']}")
                     return dev
             
             # Fallback to first available device
-            print(f">>> No exact match found, using: {self.available_devices[0]['name']}")
+            logger.info(f"No exact match found, using: {self.available_devices[0]['name']}")
             return self.available_devices[0]
             
         except Exception as e:
-            print(f"Auto-detection failed: {e}")
+            logger.error(f"Auto-detection failed: {e}")
             if self.available_devices:
                 return self.available_devices[0]
             return None
@@ -694,7 +710,7 @@ class AudioRecorder:
         old_device = self.loopback_device
         self.loopback_device = self._auto_select_device()
         if self.loopback_device != old_device:
-            print(f"Device changed to: {self.loopback_device['name'] if self.loopback_device else 'None'}")
+            logger.info(f"Device changed to: {self.loopback_device['name'] if self.loopback_device else 'None'}")
         return self.loopback_device
     
     def get_device_names(self) -> list:
@@ -706,16 +722,16 @@ class AudioRecorder:
         for dev in self.available_devices:
             if dev["name"] == device_name:
                 self.loopback_device = dev
-                print(f">>> Loopback device set to: {device_name}")
+                logger.info(f"Loopback device set to: {device_name}")
                 return True
-        print(f"Warning: Device '{device_name}' not found")
+        logger.warning(f"Device '{device_name}' not found")
         return False
     
     def _record_microphone(self):
         """Record from default microphone."""
         def callback(indata, frames, time_info, status):
             if status:
-                print(f"Mic status: {status}")
+                logger.debug(f"Mic status: {status}")
             self.mic_queue.put(indata.copy())
         
         try:
@@ -729,12 +745,12 @@ class AudioRecorder:
                 while not self.stop_event.is_set():
                     time.sleep(0.1)
         except Exception as e:
-            print(f"Microphone error: {e}")
+            logger.error(f"Microphone error: {e}")
     
     def _record_system_audio(self):
         """Record system audio via WASAPI loopback."""
         if not self.loopback_device:
-            print("No loopback device - system audio won't be captured")
+            logger.warning("No loopback device - system audio won't be captured")
             return
         
         device_sample_rate = int(self.loopback_device["defaultSampleRate"])
@@ -769,7 +785,7 @@ class AudioRecorder:
             stream.close()
             
         except Exception as e:
-            print(f"System audio error: {e}")
+            logger.error(f"System audio error: {e}")
     
     def _mix_audio(self):
         """Mix microphone and system audio streams."""
@@ -800,8 +816,19 @@ class AudioRecorder:
                     if len(sys_chunk) < max_len:
                         sys_chunk = np.pad(sys_chunk, (0, max_len - len(sys_chunk)))
                     
-                    mixed = (mic_chunk * 0.5 + sys_chunk * 0.5)
-                    
+                    # Adaptive mixing: only attenuate when both sources are active
+                    mic_has_signal = len(mic_chunk) > 0 and np.max(np.abs(mic_chunk)) > 0.001
+                    sys_has_signal = len(sys_chunk) > 0 and np.max(np.abs(sys_chunk)) > 0.001
+
+                    if mic_has_signal and sys_has_signal:
+                        mixed = mic_chunk * 0.5 + sys_chunk * 0.5
+                    elif mic_has_signal:
+                        mixed = mic_chunk
+                    elif sys_has_signal:
+                        mixed = sys_chunk
+                    else:
+                        mixed = mic_chunk  # Both silent, just pass through
+
                     max_val = np.max(np.abs(mixed))
                     if max_val > 1.0:
                         mixed = mixed / max_val
@@ -851,7 +878,7 @@ class AudioRecorder:
         self.current_meeting_folder.mkdir(exist_ok=True)
         self.current_filename = "audio.wav"
         
-        print(f"Recording started: {self.current_meeting_folder}")
+        logger.info(f"Recording started: {self.current_meeting_folder}")
         return str(self.current_meeting_folder)
     
     def stop_recording(self) -> tuple[str, float]:
@@ -874,6 +901,14 @@ class AudioRecorder:
         
         if self.mixed_audio:
             audio_data = np.concatenate(self.mixed_audio)
+
+            # Normalize quiet recordings so Whisper gets a strong signal
+            peak = np.max(np.abs(audio_data))
+            if 0 < peak < 0.5:
+                gain = min(0.9 / peak, 10.0)  # Cap at 10x to avoid amplifying pure noise
+                audio_data = audio_data * gain
+                logger.info(f"Audio normalized: peak {peak:.4f} -> {peak * gain:.4f} (gain {gain:.1f}x)")
+
             audio_int16 = (audio_data * 32767).astype(np.int16)
             
             with wave.open(str(filepath), 'wb') as wf:
@@ -883,9 +918,9 @@ class AudioRecorder:
                 wf.writeframes(audio_int16.tobytes())
             
             duration = len(audio_data) / self.sample_rate
-            print(f"Recording saved: {filepath} ({duration:.1f}s)")
+            logger.info(f"Recording saved: {filepath} ({duration:.1f}s)")
         else:
-            print("No audio recorded")
+            logger.warning("No audio recorded")
             # Remove empty folder
             self.current_meeting_folder.rmdir()
             return "", 0
@@ -901,26 +936,35 @@ class AudioRecorder:
 # MEETING PROCESSOR
 # ============================================================
 class MeetingProcessor:
-    def __init__(self):
-        self.whisper = None
-        self.ollama_url = CONFIG["ollama"]["url"]
-        self.ollama_model = CONFIG["ollama"]["model"]
-    
-    def _ensure_whisper_loaded(self):
+    def __init__(self) -> None:
+        self.whisper: WhisperModel | None = None
+        self.llm_provider: LLMProvider = get_provider(CONFIG)
+        logger.info(f"LLM provider: {self.llm_provider.name}")
+
+    def set_provider(self, provider: LLMProvider) -> None:
+        """Switch the LLM provider at runtime.
+
+        Args:
+            provider: New LLMProvider instance to use.
+        """
+        self.llm_provider = provider
+        logger.info(f"LLM provider switched to: {provider.name}")
+
+    def _ensure_whisper_loaded(self) -> None:
         """Load Whisper model on first use."""
         if self.whisper is None:
-            print(f"Loading Whisper model '{CONFIG['whisper']['model']}' on {CONFIG['whisper']['device']}...")
+            logger.info(f"Loading Whisper model '{CONFIG['whisper']['model']}' on {CONFIG['whisper']['device']}...")
             self.whisper = WhisperModel(
                 CONFIG["whisper"]["model"],
                 device=CONFIG["whisper"]["device"],
                 compute_type=CONFIG["whisper"]["compute_type"]
             )
-            print("Whisper model loaded.")
+            logger.info("Whisper model loaded.")
     
     def transcribe(self, audio_path: str) -> dict:
         """Transcribe audio file using Whisper."""
         self._ensure_whisper_loaded()
-        print(f"Transcribing: {audio_path}")
+        logger.info(f"Transcribing: {audio_path}")
         
         segments, info = self.whisper.transcribe(
             audio_path,
@@ -931,7 +975,7 @@ class MeetingProcessor:
             vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=200)
         )
         
-        print(f"Detected language: {info.language} (confidence: {info.language_probability:.2f})")
+        logger.info(f"Detected language: {info.language} (confidence: {info.language_probability:.2f})")
         
         transcript_segments = []
         full_text_parts = []
@@ -944,7 +988,7 @@ class MeetingProcessor:
             })
             full_text_parts.append(segment.text.strip())
             mins, secs = int(segment.start // 60), int(segment.start % 60)
-            print(f"  [{mins:02d}:{secs:02d}] {segment.text.strip()[:60]}...")
+            logger.debug(f"  [{mins:02d}:{secs:02d}] {segment.text.strip()[:60]}...")
         
         return {
             "language": info.language,
@@ -953,49 +997,45 @@ class MeetingProcessor:
             "segments": transcript_segments
         }
     
-    def generate_mom(self, transcript: str, date: str, duration: str, 
+    def generate_mom(self, transcript: str, date: str, duration: str,
                      meeting_type: str = "Business Meeting", summary_length: str = "Detailed") -> str:
-        """Generate Minutes of Meeting using Ollama."""
+        """Generate Minutes of Meeting using the configured LLM provider.
+
+        Args:
+            transcript: Full meeting transcript text.
+            date: Meeting date string.
+            duration: Meeting duration string.
+            meeting_type: Type of meeting (maps to template).
+            summary_length: "Brief" or "Detailed".
+
+        Returns:
+            Generated meeting minutes text.
+        """
         template = MOM_TEMPLATES.get(meeting_type, MOM_TEMPLATES["Business Meeting"])
         prompt = template.format(
             transcript=transcript,
             date=date,
             duration=duration
         )
-        
+
         # Add brief instruction if selected
         if summary_length == "Brief":
             brief_instruction = """
 
-IMPORTANT: Generate a BRIEF, CONCISE summary. Keep each section to 2-3 bullet points maximum. 
+IMPORTANT: Generate a BRIEF, CONCISE summary. Keep each section to 2-3 bullet points maximum.
 Focus only on the most critical information. Skip sections with no significant content.
 Total output should be approximately 1 page."""
-            prompt = prompt.replace("Generate the meeting minutes now:", 
+            prompt = prompt.replace("Generate the meeting minutes now:",
                                    brief_instruction + "\n\nGenerate the meeting minutes now:")
-        
-        print(f"Generating MoM ({meeting_type}, {summary_length}) with {self.ollama_model}...")
-        
-        try:
-            response = requests.post(
-                self.ollama_url,
-                json={
-                    "model": self.ollama_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": CONFIG["ollama"]["temperature"],
-                        "num_ctx": CONFIG["ollama"]["context_window"],
-                        "top_p": 0.9
-                    }
-                },
-                timeout=900
-            )
-            response.raise_for_status()
-            return response.json().get("response", "Error: No response from Ollama")
-        except requests.exceptions.ConnectionError:
-            return "Error: Cannot connect to Ollama. Make sure it's running (ollama serve)"
-        except Exception as e:
-            return f"Error: {str(e)}"
+
+        logger.info(f"Generating MoM ({meeting_type}, {summary_length}) with {self.llm_provider.name}...")
+
+        # Resolve temperature from the active provider's config section
+        provider_name = CONFIG.get("llm", {}).get("provider", "ollama")
+        temperature = CONFIG.get(provider_name, {}).get("temperature", 0.3)
+        max_tokens = CONFIG.get("openai", {}).get("max_tokens", 4096)
+
+        return self.llm_provider.generate(prompt, temperature=temperature, max_tokens=max_tokens)
     
     def process(self, audio_path: str, meeting_type: str = "Business Meeting", 
                 summary_length: str = "Detailed", title: str = None) -> dict:
@@ -1004,31 +1044,25 @@ Total output should be approximately 1 page."""
         output_dir = audio_path.parent  # Meeting subfolder
         
         # Transcribe
-        print("\n" + "="*60)
-        print("STEP 1: Transcription")
-        print("="*60)
-        
+        logger.info("STEP 1: Transcription")
+
         transcript_data = self.transcribe(str(audio_path))
-        
+
         # Save transcript
         transcript_file = output_dir / "transcript.txt"
         with open(transcript_file, 'w', encoding='utf-8') as f:
             f.write(transcript_data['text'])
-        print(f"Transcript saved: {transcript_file}")
+        logger.info(f"Transcript saved: {transcript_file}")
         
         # CHECK: Is transcript empty or too short?
         transcript_text = transcript_data['text'].strip()
         word_count = len(transcript_text.split())
         
         if not transcript_text or word_count < 10:
-            print("\n" + "!"*60)
-            print("WARNING: Transcript is empty or too short!")
-            print(f"Words captured: {word_count}")
-            print("This usually means:")
-            print("  1. Audio was not captured from the correct device")
-            print("  2. System audio (speaker) loopback is not working")
-            print("  3. Meeting audio was very quiet or muted")
-            print("!"*60)
+            logger.warning(
+                f"Transcript is empty or too short! Words captured: {word_count}. "
+                "Possible causes: wrong audio device, loopback not working, or audio was muted."
+            )
             
             # Create error MoM instead of hallucinating
             error_mom = f"""# {title if title else 'Meeting Notes'}
@@ -1071,10 +1105,7 @@ You can play it to verify if any audio was captured.
             }
         
         # Generate MoM
-        print("\n" + "="*60)
-        print(f"STEP 2: Generating {meeting_type} Notes ({summary_length})")
-        print("="*60)
-        print("="*60)
+        logger.info(f"STEP 2: Generating {meeting_type} Notes ({summary_length})")
         
         date_str = datetime.now().strftime("%B %d, %Y")
         duration_mins = int(transcript_data['duration'] // 60)
@@ -1091,18 +1122,14 @@ You can play it to verify if any audio was captured.
         mom_file = output_dir / "MoM.md"
         with open(mom_file, 'w', encoding='utf-8') as f:
             f.write(mom)
-        print(f"MoM saved: {mom_file}")
+        logger.info(f"MoM saved: {mom_file}")
         
         # Export to PDF
-        print("\n" + "="*60)
-        print("STEP 3: Exporting to PDF")
-        print("="*60)
+        logger.info("STEP 3: Exporting to PDF")
         pdf_file = self._export_to_pdf(mom, output_dir, title)
         
         # Track action items
-        print("\n" + "="*60)
-        print("STEP 4: Tracking Action Items")
-        print("="*60)
+        logger.info("STEP 4: Tracking Action Items")
         self._track_action_items(mom, output_dir, title)
         
         return {
@@ -1130,7 +1157,7 @@ You can play it to verify if any audio was captured.
                 """Convert text to latin-1 safe encoding."""
                 try:
                     return text.encode('latin-1', 'replace').decode('latin-1')
-                except:
+                except Exception:
                     return text.encode('ascii', 'replace').decode('ascii')
             
             def write_line(text, font_style='', font_size=10, indent=0, line_height=5):
@@ -1186,16 +1213,14 @@ You can play it to verify if any audio was captured.
             
             pdf_file = output_dir / "MoM.pdf"
             pdf.output(str(pdf_file))
-            print(f"PDF saved: {pdf_file}")
+            logger.info(f"PDF saved: {pdf_file}")
             return pdf_file
-            
+
         except ImportError:
-            print("PDF export skipped (fpdf2 not installed). Run: pip install fpdf2")
+            logger.warning("PDF export skipped (fpdf2 not installed). Run: pip install fpdf2")
             return None
         except Exception as e:
-            print(f"PDF export failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"PDF export failed: {e}")
             return None
     
     def _track_action_items(self, mom_content: str, meeting_folder: Path, title: str = None):
@@ -1407,18 +1432,16 @@ You can play it to verify if any audio was captured.
                 f.write("\n---\n")
                 f.write("*Status: ⬜ Pending | ✅ Done | ❌ Cancelled*\n")
             
-            print(f"Action items saved: {len(action_items)} items → {action_file}")
-            
-            # Print breakdown for debugging
+            logger.info(f"Action items saved: {len(action_items)} items -> {action_file}")
+
+            # Log breakdown for debugging
             formal_count = len([item for item in action_items if isinstance(item, list) and len(item) > 1])
             conversational_count = len(action_items) - formal_count
             if conversational_count > 0:
-                print(f"  └─ {formal_count} from formal sections, {conversational_count} from conversational phrases")
-                
+                logger.debug(f"  {formal_count} from formal sections, {conversational_count} from conversational phrases")
+
         except Exception as e:
-            print(f"Action item tracking failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Action item tracking failed: {e}")
 
 
 # ============================================================
@@ -1431,11 +1454,11 @@ class EmailSender:
     def send_mom(self, mom_content: str, mom_file: str, meeting_date: str) -> bool:
         """Send MoM via email."""
         if not self.config["enabled"]:
-            print("Email disabled in config")
+            logger.info("Email disabled in config")
             return False
-        
+
         if self.config["sender_password"] == "YOUR_APP_PASSWORD_HERE":
-            print("ERROR: Please set your Gmail App Password in config.json")
+            logger.error("Please set your Gmail App Password in config.json")
             return False
         
         try:
@@ -1471,17 +1494,17 @@ This email was automatically generated by AI Meeting Note Taker.
                 msg.attach(attachment)
             
             # Send email
-            print(f"Sending email to {self.config['recipient_email']}...")
+            logger.info(f"Sending email to {self.config['recipient_email']}...")
             with smtplib.SMTP(self.config["smtp_server"], self.config["smtp_port"]) as server:
                 server.starttls()
                 server.login(self.config["sender_email"], self.config["sender_password"])
                 server.send_message(msg)
             
-            print("Email sent successfully!")
+            logger.info("Email sent successfully!")
             return True
-            
+
         except Exception as e:
-            print(f"Email error: {e}")
+            logger.error(f"Email error: {e}")
             return False
 
 
@@ -1509,9 +1532,9 @@ class FloatingButton:
         self.root.attributes('-topmost', True)
         self.root.attributes('-alpha', 0.9)  # Slight transparency
         
-        # Window size (increased for device dropdown)
+        # Window size (increased for device + LLM provider dropdowns)
         self.width = 220
-        self.height = 165
+        self.height = 190
         
         # Position at top-right corner
         screen_width = self.root.winfo_screenwidth()
@@ -1637,7 +1660,42 @@ class FloatingButton:
             activebackground='#5a5a5a'
         )
         self.length_dropdown.pack(side='right')
-        
+
+        # LLM provider dropdown
+        self.llm_choices = ["Ollama", "GPT-4o", "GPT-4o-mini"]
+        # Determine initial selection from config
+        _init_provider = CONFIG.get("llm", {}).get("provider", "ollama")
+        if _init_provider == "openai":
+            _openai_model = CONFIG.get("openai", {}).get("model", "gpt-4o-mini")
+            _init_llm_display = {"gpt-4o": "GPT-4o", "gpt-4o-mini": "GPT-4o-mini"}.get(
+                _openai_model, "GPT-4o-mini"
+            )
+        else:
+            _init_llm_display = "Ollama"
+
+        self.llm_var = tk.StringVar(value=_init_llm_display)
+        self.llm_dropdown = tk.OptionMenu(
+            self.frame,
+            self.llm_var,
+            *self.llm_choices,
+            command=self._on_llm_change,
+        )
+        self.llm_dropdown.config(
+            font=('Arial', 7),
+            bg='#3d3d3d',
+            fg='#00bfff',  # Blue to indicate LLM provider
+            activebackground='#4d4d4d',
+            activeforeground='#00bfff',
+            highlightthickness=0,
+            bd=0,
+        )
+        self.llm_dropdown["menu"].config(
+            bg='#3d3d3d',
+            fg='white',
+            activebackground='#5a5a5a',
+        )
+        self.llm_dropdown.pack(fill='x', padx=3, pady=(0, 2))
+
         # Create main button
         self.button = tk.Button(
             self.frame,
@@ -1681,30 +1739,19 @@ class FloatingButton:
         self.recording_start = None
         self.timer_id = None
         
-        # Print startup info
-        print("="*60)
-        print("Meeting Note Taker - Ready")
-        print("="*60)
-        print("Click the floating button to start/stop recording")
-        print("Audio device auto-detects Windows default output")
-        print("Right-click for menu | Drag to reposition")
-        print("-"*60)
-        print("CONFIGURATION:")
-        print(f"  Output folder: {self.recorder.output_dir}")
-        print(f"  Whisper model: {CONFIG['whisper']['model']} on {CONFIG['whisper']['device']}")
-        print(f"  Ollama model:  {CONFIG['ollama']['model']}")
-        print(f"  Email to:      {CONFIG['email']['recipient_email']}")
-        print("-"*60)
-        print("AUDIO DEVICES (auto-detected):")
+        # Log startup info
+        logger.info("Meeting Note Taker - Ready")
+        logger.info("Click the floating button to start/stop recording")
+        logger.debug(f"Output folder: {self.recorder.output_dir}")
+        logger.debug(f"Whisper model: {CONFIG['whisper']['model']} on {CONFIG['whisper']['device']}")
+        logger.debug(f"LLM provider:  {self.processor.llm_provider.name}")
+        logger.debug(f"Email to:      {CONFIG['email']['recipient_email']}")
         if self.recorder.available_devices:
             for dev in self.recorder.available_devices:
                 marker = ">>>" if dev == self.recorder.loopback_device else "   "
-                print(f"  {marker} {dev['name']}")
+                logger.debug(f"  {marker} {dev['name']}")
         else:
-            print("  ✗ No loopback devices found - only mic will be recorded!")
-        print("-"*60)
-        print("TIP: Change Windows default audio output to switch devices")
-        print("="*60)
+            logger.warning("No loopback devices found - only mic will be recorded!")
     
     def _on_title_focus_in(self, event):
         """Clear placeholder text on focus."""
@@ -1716,7 +1763,7 @@ class FloatingButton:
         if not self.title_var.get().strip():
             self.title_entry.insert(0, "Meeting title...")
     
-    def _on_device_change(self, selected_display_name):
+    def _on_device_change(self, selected_display_name: str) -> None:
         """Handle device selection change."""
         # Find the full device name from the shortened display name
         for i, display_name in enumerate(self.device_display_names):
@@ -1724,6 +1771,30 @@ class FloatingButton:
                 full_name = self.device_names[i]
                 self.recorder.set_loopback_device(full_name)
                 break
+
+    def _on_llm_change(self, selected: str) -> None:
+        """Handle LLM provider selection change.
+
+        Args:
+            selected: Display name from the dropdown (e.g. "Ollama", "GPT-4o").
+        """
+        if selected == "Ollama":
+            provider = OllamaProvider(
+                model=CONFIG["ollama"]["model"],
+                url=CONFIG["ollama"]["url"],
+                context_window=CONFIG["ollama"]["context_window"],
+            )
+        else:
+            model_map = {"GPT-4o": "gpt-4o", "GPT-4o-mini": "gpt-4o-mini"}
+            model_id = model_map.get(selected, "gpt-4o-mini")
+            api_key = os.environ.get("OPENAI_API_KEY", CONFIG.get("openai", {}).get("api_key", ""))
+            provider = OpenAIProvider(model=model_id, api_key=api_key)
+            if not provider.is_available():
+                self.status_var.set("No API key!")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+                logger.warning("OpenAI API key not configured")
+                return
+        self.processor.set_provider(provider)
     
     def _start_drag(self, event):
         """Start dragging the window."""
@@ -1790,6 +1861,7 @@ class FloatingButton:
         self.device_dropdown.config(state='disabled')
         self.type_dropdown.config(state='disabled')
         self.length_dropdown.config(state='disabled')
+        self.llm_dropdown.config(state='disabled')
         self.title_entry.config(state='disabled')
         
         # Update UI
@@ -1821,12 +1893,13 @@ class FloatingButton:
             self.status_var.set("Too short")
             self.root.after(2000, lambda: self.status_var.set("Ready"))
     
-    def _enable_inputs(self):
+    def _enable_inputs(self) -> None:
         """Re-enable all input fields."""
         self.button.config(bg='#4a4a4a')
         self.device_dropdown.config(state='normal')
         self.type_dropdown.config(state='normal')
         self.length_dropdown.config(state='normal')
+        self.llm_dropdown.config(state='normal')
         self.title_entry.config(state='normal')
     
     def _process_recording(self):
@@ -1861,7 +1934,7 @@ class FloatingButton:
                 self.root.after(0, lambda: self.status_var.set("✓ Saved"))
             
         except Exception as e:
-            print(f"Processing error: {e}")
+            logger.error(f"Processing error: {e}")
             self.root.after(0, lambda: self.status_var.set("Error!"))
         
         finally:
